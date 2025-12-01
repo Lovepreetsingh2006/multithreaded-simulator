@@ -1,15 +1,14 @@
 # src/simulator/controller.py
-
 """
 SimulationController:
 - Manages simulated threads, kernel threads, schedulers, mapping models
 - Runs the ticking loop (background thread)
-- Provides functions used by the Flask API
+- Provides functions used by the Flask API (including semaphore & monitor ops)
 """
 
 import threading
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .core import (
     SimThread,
@@ -20,10 +19,9 @@ from .core import (
     PriorityScheduler,
     MappingModel,
 )
-from .sync import SimSemaphore
+from .sync import SimSemaphore, Monitor
 
-
-# Speed of simulation: 1 tick = 0.2 sec
+# Default tick interval (seconds)
 TICK_INTERVAL = 0.2
 
 
@@ -32,20 +30,20 @@ class SimulationController:
     Central manager for the simulator.
     """
 
-    def __init__(self, num_kernel_threads=2, model=MappingModel.MANY_TO_MANY,
-                 scheduler_name="RR", quantum=1):
+    def __init__(self, num_kernel_threads: int = 2,
+                 model: MappingModel = MappingModel.MANY_TO_MANY,
+                 scheduler_name: str = "RR",
+                 quantum: int = 1):
 
         self.lock = threading.RLock()
 
-        # Thread table
+        # Thread table: id -> SimThread
         self.threads: Dict[int, SimThread] = {}
 
-        # CPU cores
-        self.kernels: List[KernelThread] = [
-            KernelThread(i) for i in range(num_kernel_threads)
-        ]
+        # Kernel threads / cores
+        self.kernels: List[KernelThread] = [KernelThread(i) for i in range(num_kernel_threads)]
 
-        # Scheduling & mapping
+        # Mapping & scheduling
         self.model = model
         self.quantum = quantum
         self.scheduler = self._make_scheduler(scheduler_name)
@@ -53,23 +51,20 @@ class SimulationController:
         # Simulation state
         self.running = False
         self._tick = 0
-        self._runner_thread = None
+        self._runner_thread: Optional[threading.Thread] = None
 
-        # Synchronization objects
+        # Sync primitives
         self.semaphores: Dict[str, SimSemaphore] = {}
+        self.monitors: Dict[str, Monitor] = {}
 
         # Statistics
-        self.stats = {
-            "context_switches": 0,
-            "completed": 0
-        }
+        self.stats = {"context_switches": 0, "completed": 0}
 
     # -----------------------------
-    # INTERNAL HELPERS
+    # Internal helpers
     # -----------------------------
-
-    def _make_scheduler(self, name):
-        name = name.upper()
+    def _make_scheduler(self, name: str):
+        name = (name or "RR").upper()
         if name in ("RR", "ROUNDROBIN"):
             return RoundRobinScheduler()
         if name in ("FCFS", "FIFO"):
@@ -79,26 +74,27 @@ class SimulationController:
         return RoundRobinScheduler()
 
     # -----------------------------
-    # CONTROLLED SETTINGS
+    # Configuration setters
     # -----------------------------
-
-    def set_scheduler(self, name):
+    def set_scheduler(self, name: str):
         with self.lock:
             self.scheduler = self._make_scheduler(name)
 
     def set_model(self, model_name: str):
         with self.lock:
-            self.model = MappingModel[model_name]
+            if isinstance(model_name, str):
+                self.model = MappingModel[model_name]
+            elif isinstance(model_name, MappingModel):
+                self.model = model_name
 
     def set_quantum(self, q: int):
         with self.lock:
-            self.quantum = q
+            self.quantum = int(q)
 
     # -----------------------------
-    # THREAD MANAGEMENT
+    # Thread lifecycle
     # -----------------------------
-
-    def add_thread(self, total_burst=10, priority=0, name=None):
+    def add_thread(self, total_burst: int = 10, priority: int = 0, name: str = None) -> SimThread:
         with self.lock:
             t = SimThread(total_burst=total_burst, priority=priority, name=name)
             t.state = ThreadState.READY
@@ -106,87 +102,180 @@ class SimulationController:
             self.scheduler.add(t)
             return t
 
-    # -----------------------------
-    # SEMAPHORE MANAGEMENT
-    # -----------------------------
+    def get_thread(self, tid: int) -> Optional[SimThread]:
+        return self.threads.get(int(tid))
 
-    def create_semaphore(self, name: str, initial=1):
+    # -----------------------------
+    # Semaphore & Monitor management
+    # -----------------------------
+    def create_semaphore(self, name: str, initial: int = 1) -> SimSemaphore:
         with self.lock:
             s = SimSemaphore(initial, name=name)
             self.semaphores[name] = s
             return s
 
-    # -----------------------------
-    # STATE SNAPSHOT (for frontend)
-    # -----------------------------
+    def get_semaphore(self, name: str) -> Optional[SimSemaphore]:
+        return self.semaphores.get(name)
 
-    def get_state_snapshot(self):
-        """
-        Return JSON-serializable snapshot of entire simulation state.
-        """
-
+    def create_monitor(self, name: str) -> Monitor:
         with self.lock:
-            threads_list = []
-            for t in self.threads.values():
-                threads_list.append({
+            m = Monitor()
+            self.monitors[name] = m
+            return m
+
+    def get_monitor(self, name: str) -> Optional[Monitor]:
+        return self.monitors.get(name)
+
+    # -----------------------------
+    # Cooperative blocking operations
+    # -----------------------------
+
+    def semaphore_wait(self, sem_name: str, thread_id: int) -> Dict:
+        """
+        Attempt P() on semaphore for given thread.
+        If the semaphore causes blocking, mark thread BLOCKED and remove from scheduler.
+        Returns a dict: {"acquired": bool, "blocked": bool}
+        """
+        with self.lock:
+            sem = self.semaphores.get(sem_name)
+            t = self.threads.get(int(thread_id))
+            if sem is None:
+                return {"ok": False, "error": f"Semaphore '{sem_name}' not found."}
+            if t is None:
+                return {"ok": False, "error": f"Thread id {thread_id} not found."}
+
+            acquired = sem.P(t)
+            if not acquired:
+                # block the thread: remove from scheduler queue, set state
+                t.state = ThreadState.BLOCKED
+                try:
+                    self.scheduler.remove(t)
+                except Exception:
+                    pass
+                # If the thread was assigned to a kernel, release it
+                for k in self.kernels:
+                    if k.current_thread is t:
+                        k.release()
+                return {"ok": True, "acquired": False, "blocked": True}
+            else:
+                return {"ok": True, "acquired": True, "blocked": False}
+
+    def semaphore_signal(self, sem_name: str) -> Dict:
+        """
+        Perform V() on semaphore; if an unblocked thread returned by V(), set it to READY and re-add to scheduler.
+        """
+        with self.lock:
+            sem = self.semaphores.get(sem_name)
+            if sem is None:
+                return {"ok": False, "error": f"Semaphore '{sem_name}' not found."}
+            unblocked = sem.V()
+            if unblocked is not None:
+                # set unblocked thread to READY and add back to scheduler
+                unblocked.state = ThreadState.READY
+                self.scheduler.add(unblocked)
+                return {"ok": True, "unblocked": unblocked.id}
+            return {"ok": True, "unblocked": None}
+
+    # Monitor primitives (simple)
+    def monitor_wait(self, monitor_name: str, cond_name: str, thread_id: int) -> Dict:
+        with self.lock:
+            mon = self.monitors.get(monitor_name)
+            t = self.threads.get(int(thread_id))
+            if mon is None:
+                return {"ok": False, "error": f"Monitor '{monitor_name}' not found."}
+            if t is None:
+                return {"ok": False, "error": f"Thread id {thread_id} not found."}
+            # caller is expected to release monitor lock; here we just enqueue
+            t.state = ThreadState.BLOCKED
+            mon.wait(cond_name, t)
+            try:
+                self.scheduler.remove(t)
+            except Exception:
+                pass
+            # release assignment if any
+            for k in self.kernels:
+                if k.current_thread is t:
+                    k.release()
+            return {"ok": True, "blocked": t.id}
+
+    def monitor_signal(self, monitor_name: str, cond_name: str) -> Dict:
+        with self.lock:
+            mon = self.monitors.get(monitor_name)
+            if mon is None:
+                return {"ok": False, "error": f"Monitor '{monitor_name}' not found."}
+            th = mon.signal(cond_name)
+            if th:
+                th.state = ThreadState.READY
+                self.scheduler.add(th)
+                return {"ok": True, "unblocked": th.id}
+            return {"ok": True, "unblocked": None}
+
+    def monitor_broadcast(self, monitor_name: str, cond_name: str) -> Dict:
+        with self.lock:
+            mon = self.monitors.get(monitor_name)
+            if mon is None:
+                return {"ok": False, "error": f"Monitor '{monitor_name}' not found."}
+            lst = mon.broadcast(cond_name)
+            for th in lst:
+                th.state = ThreadState.READY
+                self.scheduler.add(th)
+            return {"ok": True, "unblocked": [t.id for t in lst]}
+
+    # -----------------------------
+    # Snapshot for frontend
+    # -----------------------------
+    def get_state_snapshot(self) -> Dict:
+        with self.lock:
+            threads = [
+                {
                     "id": t.id,
                     "name": t.name,
                     "state": t.state.value,
                     "remaining": t.remaining,
                     "priority": t.priority,
-                    "mapped_kernel": t.mapped_kernel
-                })
-
-            kernels_list = []
-            for k in self.kernels:
-                kernels_list.append({
-                    "id": k.id,
-                    "current_thread": k.current_thread.id if k.current_thread else None
-                })
-
-            sems = {}
-            for name, sem in self.semaphores.items():
-                sems[name] = {
-                    "value": sem.value,
-                    "blocked": [t.id for t in sem.peek_blocked()]
+                    "mapped_kernel": t.mapped_kernel,
                 }
-
+                for t in sorted(self.threads.values(), key=lambda x: x.id)
+            ]
+            kernels = [
+                {
+                    "id": k.id,
+                    "current_thread": k.current_thread.id if k.current_thread else None,
+                }
+                for k in self.kernels
+            ]
+            sems = {name: {"value": s.value, "blocked": [th.id for th in s.peek_blocked()]} for name, s in self.semaphores.items()}
+            mons = {name: {"conds": {}} for name in self.monitors.keys()}
+            stats = dict(self.stats)
             return {
                 "tick": self._tick,
-                "threads": threads_list,
-                "kernels": kernels_list,
+                "threads": threads,
+                "kernels": kernels,
                 "semaphores": sems,
+                "monitors": mons,
                 "model": self.model.value,
                 "quantum": self.quantum,
-                "stats": dict(self.stats)
+                "stats": stats,
             }
 
     # -----------------------------
-    # MAIN TICK FUNCTION
+    # Tick / Run loop
     # -----------------------------
-
-    def _assign_thread_to_kernel(self, thread):
-        """
-        Mapping model logic.
-        """
-
+    def _assign_thread_to_kernel(self, thread: SimThread) -> KernelThread:
         if self.model == MappingModel.MANY_TO_ONE:
             k = self.kernels[0]
             k.assign(thread)
             return k
-
         elif self.model == MappingModel.ONE_TO_ONE:
             idx = (thread.id - 1) % len(self.kernels)
             k = self.kernels[idx]
             k.assign(thread)
             return k
-
         else:  # MANY_TO_MANY
             for k in self.kernels:
-                if k.current_thread is None or k.current_thread.state == ThreadState.TERMINATED:
+                if k.current_thread is None or k.current_thread.state in (ThreadState.TERMINATED, ThreadState.BLOCKED):
                     k.assign(thread)
                     return k
-            # fallback: assign to kernel 0
             k = self.kernels[0]
             k.assign(thread)
             return k
@@ -195,40 +284,28 @@ class SimulationController:
         with self.lock:
             self._tick += 1
 
-            # For each kernel
-            for core in self.kernels:
-
-                # If core has no running thread, get one
-                if (core.current_thread is None
-                        or core.current_thread.state in (ThreadState.TERMINATED, ThreadState.BLOCKED)):
-
+            for k in self.kernels:
+                if k.current_thread is None or k.current_thread.state in (ThreadState.TERMINATED, ThreadState.BLOCKED):
                     nxt = self.scheduler.next()
                     if nxt is None:
                         continue
-
                     if nxt.state == ThreadState.TERMINATED:
                         continue
-
                     self.stats["context_switches"] += 1
                     nxt.state = ThreadState.RUNNING
-                    core.assign(nxt)
+                    k.assign(nxt)
 
-                # Run assigned thread
-                if core.current_thread and core.current_thread.state == ThreadState.RUNNING:
-                    used = core.current_thread.run_slice(self.quantum)
-
-                    if core.current_thread.state == ThreadState.TERMINATED:
+                # run if there's a running thread
+                if k.current_thread and k.current_thread.state == ThreadState.RUNNING:
+                    used = k.current_thread.run_slice(self.quantum)
+                    # thread finished
+                    if k.current_thread.state == ThreadState.TERMINATED:
                         self.stats["completed"] += 1
-                        core.release()
-
+                        k.release()
                     else:
-                        # Put back to scheduler
-                        self.scheduler.add(core.current_thread)
-                        core.release()
-
-    # -----------------------------
-    # RUNNING LOOP
-    # -----------------------------
+                        # put back into scheduler (for RR semantics)
+                        self.scheduler.add(k.current_thread)
+                        k.release()
 
     def start(self):
         with self.lock:
@@ -253,3 +330,18 @@ class SimulationController:
     def step(self):
         with self.lock:
             self._run_tick()
+
+    # -----------------------------
+    # Utility: reset (handy for demos)
+    # -----------------------------
+    def reset(self):
+        with self.lock:
+            self.threads.clear()
+            for k in self.kernels:
+                k.release()
+            self.semaphores.clear()
+            self.monitors.clear()
+            self._tick = 0
+            self.stats = {"context_switches": 0, "completed": 0}
+            # also reset scheduler
+            self.scheduler = self._make_scheduler("RR")
