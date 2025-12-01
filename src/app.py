@@ -12,7 +12,7 @@ Frontend (HTML/CSS/JS) will communicate with this server to:
 from flask import Flask, jsonify, request, send_from_directory
 import os
 
-from simulator.controller import SimulationController
+from src.simulator.controller import SimulationController
 
 
 # Flask Paths
