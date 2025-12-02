@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Multithreaded Simulator Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="app-root">
+    <header class="app-header glass">
+      <div>
+        <h1>Real-Time Multithreaded Simulator</h1>
+        <p class="subtitle">
+          Visualizing user threads, kernel threads, models &amp; synchronization.
+        </p>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-primary" id="badge-model">Model: -</span>
+        <span class="badge badge-secondary" id="badge-scheduler">Scheduler: RR</span>
+        <span class="badge badge-secondary" id="badge-quantum">Quantum: 1</span>
+      </div>
+    </header>
+
+    <main class="layout-grid">
+      <!-- LEFT: Controls + Stats -->
+      <section class="panel glass" id="control-panel">
+        <div class="panel-header">
+          <h2>Controls</h2>
+        </div>
+
+        <div class="controls-grid">
+          <div class="controls-row">
+            <button class="btn btn-primary" id="btn-init-demo">Init Demo</button>
+            <button class="btn" id="btn-start">Start</button>
+            <button class="btn" id="btn-pause">Pause</button>
+            <button class="btn" id="btn-step">Step</button>
+            <button class="btn btn-danger" id="btn-reset">Reset</button>
+          </div>
+
+          <div class="controls-row">
+            <div class="field-group">
+              <label for="select-model">Mapping Model</label>
+              <select id="select-model">
+                <option value="MANY_TO_ONE">Many-to-One</option>
+                <option value="ONE_TO_ONE">One-to-One</option>
+                <option value="MANY_TO_MANY" selected>Many-to-Many</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <label for="select-scheduler">Scheduler</label>
+              <select id="select-scheduler">
+                <option value="RR">Round Robin</option>
+                <option value="FCFS">FCFS</option>
+                <option value="PRIORITY">Priority</option>
+              </select>
+            </div>
+
+            <div class="field-group">
+              <label for="input-quantum">Quantum</label>
+              <input id="input-quantum" type="number" min="1" value="1" />
+            </div>
+
+            <button class="btn btn-outline" id="btn-apply-config">
+              Apply
+            </button>
+          </div>
+        </div>
+
+        <div class="panel-header panel-header--spaced">
+          <h2>Stats</h2>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card glass-soft">
+            <span class="stat-label">Tick</span>
+            <span class="stat-value" id="stat-tick">0</span>
+          </div>
+          <div class="stat-card glass-soft">
+            <span class="stat-label">Threads</span>
+            <span class="stat-value" id="stat-threads">0</span>
+          </div>
+          <div class="stat-card glass-soft">
+            <span class="stat-label">Completed</span>
+            <span class="stat-value" id="stat-completed">0</span>
+          </div>
+          <div class="stat-card glass-soft">
+            <span class="stat-label">Context Switches</span>
+            <span class="stat-value" id="stat-context-switches">0</span>
+          </div>
+        </div>
+
+        <div class="panel-header panel-header--spaced">
+          <h2>Add Thread</h2>
+        </div>
+
+        <form id="form-add-thread" class="add-thread-form">
+          <div class="field-group">
+            <label for="thread-name">Name</label>
+            <input id="thread-name" type="text" placeholder="e.g. T4-user" />
+          </div>
+          <div class="field-group">
+            <label for="thread-burst">Burst Time</label>
+            <input id="thread-burst" type="number" min="1" value="12" />
+          </div>
+          <div class="field-group">
+            <label for="thread-priority">Priority</label>
+            <input id="thread-priority" type="number" min="0" value="0" />
+          </div>
+          <button class="btn btn-primary" type="submit">Add Thread</button>
+        </form>
+      </section>
+
+      <!-- CENTER: Threads + Cores -->
+      <section class="panel glass" id="threads-panel">
+        <div class="panel-header">
+          <h2>Threads</h2>
+        </div>
+        <div class="threads-table-wrapper">
+          <table class="threads-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>State</th>
+                <th>Remaining</th>
+                <th>Priority</th>
+                <th>Core</th>
+              </tr>
+            </thead>
+            <tbody id="threads-tbody">
+              <!-- Filled by JS -->
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel-header panel-header--spaced">
+          <h2>CPU Cores</h2>
+        </div>
+
+        <div class="cores-grid" id="cores-grid">
+          <!-- Filled by JS -->
+        </div>
+      </section>
+
+      <!-- RIGHT: Synchronization + Log -->
+      <section class="panel glass" id="sync-panel">
+        <div class="panel-header">
+          <h2>Synchronization</h2>
+        </div>
+
+        <div class="sync-section">
+          <h3>Semaphores</h3>
+          <div id="semaphore-list" class="semaphore-list">
+            <!-- Filled by JS -->
+          </div>
+        </div>
+
+        <div class="sync-section">
+          <h3>Event Log</h3>
+          <div id="event-log" class="event-log">
+            <!-- New lines appended by JS -->
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/js/app.js" defer></script>
+</body>
+</html>

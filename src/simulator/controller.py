@@ -77,8 +77,20 @@ class SimulationController:
     # Configuration setters
     # -----------------------------
     def set_scheduler(self, name: str):
+        """
+        Change scheduler type and re-register all non-terminated, non-blocked threads
+        so the new scheduler gets a proper READY queue.
+        """
         with self.lock:
-            self.scheduler = self._make_scheduler(name)
+            new_sched = self._make_scheduler(name)
+
+            # Re-add all runnable threads to the new scheduler
+            for t in self.threads.values():
+                if t.state not in (ThreadState.TERMINATED, ThreadState.BLOCKED):
+                    new_sched.add(t)
+
+            self.scheduler = new_sched
+
 
     def set_model(self, model_name: str):
         with self.lock:
@@ -281,31 +293,48 @@ class SimulationController:
             return k
 
     def _run_tick(self):
-        with self.lock:
-            self._tick += 1
+            with self.lock:
+                self._tick += 1
 
             for k in self.kernels:
-                if k.current_thread is None or k.current_thread.state in (ThreadState.TERMINATED, ThreadState.BLOCKED):
+
+                # If kernel is empty or has a non-runnable thread, assign a new one
+                if k.current_thread is None or k.current_thread.state in (
+                    ThreadState.TERMINATED,
+                    ThreadState.BLOCKED,
+                ):
                     nxt = self.scheduler.next()
                     if nxt is None:
+                        k.release()
                         continue
                     if nxt.state == ThreadState.TERMINATED:
                         continue
+
                     self.stats["context_switches"] += 1
                     nxt.state = ThreadState.RUNNING
                     k.assign(nxt)
 
-                # run if there's a running thread
-                if k.current_thread and k.current_thread.state == ThreadState.RUNNING:
-                    used = k.current_thread.run_slice(self.quantum)
-                    # thread finished
-                    if k.current_thread.state == ThreadState.TERMINATED:
-                        self.stats["completed"] += 1
-                        k.release()
-                    else:
-                        # put back into scheduler (for RR semantics)
-                        self.scheduler.add(k.current_thread)
-                        k.release()
+                # If after this we still have no thread assigned, skip
+                if k.current_thread is None:
+                    continue
+
+                # Run one quantum on the assigned thread
+                used = k.current_thread.run_slice(self.quantum)
+
+                # If the thread finished during this tick, free the core
+                if k.current_thread.state == ThreadState.TERMINATED:
+                    self.stats["completed"] += 1
+                    k.release()
+                    # No requeue; finished is done
+                    continue
+
+                # IMPORTANT: we do NOT requeue + release here.
+                # The thread stays bound to this core and in RUNNING state
+                # until it finishes or is blocked. This makes the core visibly busy
+                # in the frontend between ticks.
+
+
+
 
     def start(self):
         with self.lock:
@@ -345,3 +374,4 @@ class SimulationController:
             self.stats = {"context_switches": 0, "completed": 0}
             # also reset scheduler
             self.scheduler = self._make_scheduler("RR")
+

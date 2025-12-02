@@ -23,6 +23,29 @@ app = Flask(__name__, static_folder=STATIC_DIR, template_folder=TEMPLATES_DIR)
 # single controller instance
 controller = SimulationController(num_kernel_threads=2)
 
+def init_demo_state():
+    """
+    Reset the simulator and create some default demo threads + a semaphore,
+    then start the simulation.
+    Call this once (e.g. from frontend on page load).
+    """
+    controller.reset()
+
+    # Choose default model & scheduler BEFORE creating threads
+    controller.set_model("MANY_TO_MANY")
+    controller.set_scheduler("RR")
+    controller.set_quantum(1)
+
+    # Create some demo threads with different burst times & priorities
+    controller.add_thread(total_burst=15, priority=1, name="T1-IO-bound")
+    controller.add_thread(total_burst=25, priority=2, name="T2-CPU-bound")
+    controller.add_thread(total_burst=18, priority=0, name="T3-background")
+
+    # Optional: create a demo semaphore (e.g. shared resource)
+    controller.create_semaphore("S1", initial=1)
+
+    # Start simulation
+    controller.start()
 
 # Basic state endpoint
 @app.route("/api/state", methods=["GET"])
@@ -77,6 +100,17 @@ def api_set():
         controller.set_scheduler(data["scheduler"])
     if "quantum" in data:
         controller.set_quantum(int(data["quantum"]))
+    return jsonify({"ok": True})
+
+@app.route("/api/init_demo", methods=["POST"])
+def api_init_demo():
+    """
+    Initialize a default demo scenario:
+    - Reset everything
+    - Create demo threads & semaphore
+    - Start simulation
+    """
+    init_demo_state()
     return jsonify({"ok": True})
 
 
@@ -164,3 +198,4 @@ def serve_static(path):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=True)
+

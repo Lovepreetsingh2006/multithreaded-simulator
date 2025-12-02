@@ -55,19 +55,24 @@ class SimThread:
         return self.remaining <= 0
 
     def run_slice(self, quantum=1):
-        with self.lock:
-            if self.state in (ThreadState.BLOCKED, ThreadState.TERMINATED):
-                return 0
+            with self.lock:
+            # if this thread is blocked or already finished, do nothing
+                if self.state in (ThreadState.BLOCKED, ThreadState.TERMINATED):
+                    return 0
 
             to_run = min(self.remaining, quantum)
             self.remaining -= to_run
 
             if self.remaining <= 0:
+                # finished this tick
                 self.state = ThreadState.TERMINATED
             else:
-                self.state = ThreadState.READY
+                # keep it in RUNNING; controller / scheduler will
+                # change to READY when preempted or requeued
+                self.state = ThreadState.RUNNING
 
             return to_run
+
 
     def __repr__(self):
         return f"<SimThread {self.name} id={self.id} state={self.state.name} rem={self.remaining} pr={self.priority}>"
