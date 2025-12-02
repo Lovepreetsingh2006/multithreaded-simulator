@@ -13,7 +13,7 @@ let pollTimer = null;
 let lastTick = 0;
 
 // =============================
-//   SEMAPHORE FUNCTIONS (new)
+//   SEMAPHORE FUNCTIONS
 // =============================
 
 function createSemaphore() {
@@ -45,11 +45,13 @@ function semaphoreSignal(semName) {
   }).then(() => refreshState());
 }
 
-// Simple helper so our semaphore functions can trigger a UI refresh
 function refreshState() {
   pollState();
 }
 
+// =============================
+//   API HELPERS
+// =============================
 async function apiPost(url, body) {
   const res = await fetch(url, {
     method: "POST",
@@ -64,8 +66,31 @@ async function apiGet(url) {
   return res.json();
 }
 
-// UI update
+// =============================
+//  Build Thread Action Buttons
+// =============================
+function makeThreadActions(thread, semaphores) {
+  if (thread.state === "TERMINATED") return "-";
+  if (thread.state === "BLOCKED") return "<em>BLOCKED</em>";
 
+  let html = "";
+
+  for (let name of Object.keys(semaphores)) {
+    html += `
+      <button class="btn-primary" onclick="semaphoreWait('${name}', ${thread.id})">
+        WAIT ${name}
+      </button>
+    `;
+  }
+
+  if (html.trim() === "") return "<em>No semaphores</em>";
+
+  return html;
+}
+
+// =============================
+//   UI UPDATE
+// =============================
 function renderState(state) {
   // Stats
   document.getElementById("stat-tick").textContent = state.tick;
@@ -77,9 +102,7 @@ function renderState(state) {
 
   // Badges
   document.getElementById("badge-model").textContent = `Model: ${state.model}`;
-  document.getElementById(
-    "badge-quantum"
-  ).textContent = `Quantum: ${state.quantum}`;
+  document.getElementById("badge-quantum").textContent = `Quantum: ${state.quantum}`;
 
   // Threads table
   const tbody = document.getElementById("threads-tbody");
@@ -88,27 +111,19 @@ function renderState(state) {
   state.threads.forEach((t) => {
     const tr = document.createElement("tr");
 
-    const isRunningOnAnyCore = state.kernels.some(
-      (k) => k.current_thread === t.id
-    );
-
-    if (t.state === "RUNNING" || isRunningOnAnyCore) {
+    const isRunning = state.kernels.some((k) => k.current_thread === t.id);
+    if (isRunning) {
       tr.classList.add("thread-row-running");
     }
 
     const stateClass = (() => {
       switch (t.state) {
-        case "RUNNING":
-          return "state-running";
-        case "READY":
-          return "state-ready";
-        case "BLOCKED":
-          return "state-blocked";
-        case "TERMINATED":
-          return "state-terminated";
-        default:
-          return "state-ready";
+        case "RUNNING": return "state-running";
+        case "READY": return "state-ready";
+        case "BLOCKED": return "state-blocked";
+        case "TERMINATED": return "state-terminated";
       }
+      return "state-ready";
     })();
 
     const stateCell = `
@@ -125,12 +140,9 @@ function renderState(state) {
       <td>${t.remaining}</td>
       <td>${t.priority}</td>
       <td>${t.mapped_kernel === null ? "-" : t.mapped_kernel}</td>
-      <td>
-        <button class="btn-primary" onclick="semaphoreWait('S1', ${t.id})">
-          WAIT S1
-        </button>
-      </td>
+      <td>${makeThreadActions(t, state.semaphores)}</td>
     `;
+
     tbody.appendChild(tr);
   });
 
@@ -140,7 +152,7 @@ function renderState(state) {
 
   state.kernels.forEach((k) => {
     const busy = k.current_thread !== null;
-    const currentThread = state.threads.find((t) => t.id === k.current_thread);
+    const threadObj = state.threads.find((t) => t.id === k.current_thread);
 
     const div = document.createElement("div");
     div.className = "core-card" + (busy ? " busy" : "");
@@ -149,14 +161,14 @@ function renderState(state) {
       <div class="core-pulse"></div>
       <div class="core-header">
         <span class="core-name">Core #${k.id}</span>
-        <span class="core-status ${
-          busy ? "core-status-busy" : "core-status-idle"
-        }">${busy ? "RUNNING" : "IDLE"}</span>
+        <span class="core-status ${busy ? "core-status-busy" : "core-status-idle"}">
+          ${busy ? "RUNNING" : "IDLE"}
+        </span>
       </div>
       <div class="core-body">
         ${
-          busy && currentThread
-            ? `<div class="core-thread-name">${currentThread.name}</div>
+          busy && threadObj
+            ? `<div class="core-thread-name">${threadObj.name}</div>
                <div class="thread-state-pill state-running" style="margin-top:4px;">
                  <span class="thread-state-dot"></span>
                  <span>RUNNING</span>
@@ -165,64 +177,69 @@ function renderState(state) {
         }
       </div>
     `;
+
     coresGrid.appendChild(div);
   });
 
   // =============================
-  //   SEMAPHORES UI (new)
+  //   SEMAPHORES UI
   // =============================
-  let semList = document.getElementById("sem-list");
+  const semList = document.getElementById("sem-list");
   semList.innerHTML = "";
 
-  for (let [name, sem] of Object.entries(state.semaphores || {})) {
-    let blocked = sem.blocked.length ? sem.blocked.join(", ") : "None";
-
-    let div = document.createElement("div");
+  for (let [name, sem] of Object.entries(state.semaphores)) {
+    const div = document.createElement("div");
     div.className = "sem-card";
 
-    div.innerHTML = `
-      <div class="flex justify-between">
-        <div>
-          <strong>${name}</strong><br>
-          Value: ${sem.value} <br>
-          Blocked: ${blocked}
-        </div>
+    const blocked = sem.blocked.length ? sem.blocked.join(", ") : "None";
 
-        <div class="flex flex-col space-y-2">
-          <button class="btn-primary" onclick="semaphoreSignal('${name}')">
-            SIGNAL (V)
-          </button>
+    div.innerHTML = `
+      <div class="sem-header">
+        <span class="sem-name">${name}</span>
+        <span class="sem-value ${sem.value > 0 ? "available" : "locked"}">
+          <span class="value-icon">🔒</span>
+          <span class="value-text">${sem.value}</span>
+        </span>
+      </div>
+
+      <div class="sem-details">
+        <div class="sem-blocked">
+          <div class="blocked-label">Blocked Threads:</div>
+          <div class="blocked-value">${blocked}</div>
         </div>
+      </div>
+
+      <div class="sem-actions">
+        <button class="btn-primary" onclick="semaphoreSignal('${name}')">SIGNAL (V)</button>
       </div>
     `;
 
     semList.appendChild(div);
   }
 
-  // Simple event log: log on tick change
+  // =============================
+  //   EVENT LOG
+  // =============================
   if (state.tick !== lastTick) {
     const log = document.getElementById("event-log");
     const line = document.createElement("div");
     line.className = "event-line";
-    const runningCount = state.threads.filter(
-      (t) => t.state === "RUNNING"
-    ).length;
-    const readyCount = state.threads.filter(
-      (t) => t.state === "READY"
-    ).length;
-    const blockedCount = state.threads.filter(
-      (t) => t.state === "BLOCKED"
-    ).length;
+
+    const runningCount = state.threads.filter((t) => t.state === "RUNNING").length;
+    const readyCount = state.threads.filter((t) => t.state === "READY").length;
+    const blockedCount = state.threads.filter((t) => t.state === "BLOCKED").length;
 
     line.innerHTML = `Tick <span>${state.tick}</span>: RUN ${runningCount}, READY ${readyCount}, BLOCKED ${blockedCount}`;
     log.appendChild(line);
     log.scrollTop = log.scrollHeight;
+
     lastTick = state.tick;
   }
 }
 
-// Polling loop
-
+// =============================
+//   POLLING LOOP
+// =============================
 async function pollState() {
   try {
     const state = await apiGet(API.state);
@@ -232,30 +249,31 @@ async function pollState() {
   }
 }
 
-// Controls wiring
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollState, 500);
+}
 
+// =============================
+//   CONTROLS
+// =============================
 function setupControls() {
-  document
-    .getElementById("btn-init-demo")
-    .addEventListener("click", async () => {
-      await apiPost(API.initDemo);
-      lastTick = 0;
-      const log = document.getElementById("event-log");
-      log.innerHTML = "";
-      pollState();
-    });
+  document.getElementById("btn-init-demo").addEventListener("click", async () => {
+    await apiPost(API.initDemo);
+    lastTick = 0;
+    document.getElementById("event-log").innerHTML = "";
+    pollState();
+  });
 
   document.getElementById("btn-start").addEventListener("click", async () => {
-  await apiPost(API.start);
-  document.body.classList.remove("no-animations");
-});
-
+    await apiPost(API.start);
+    document.body.classList.remove("no-animations");
+  });
 
   document.getElementById("btn-pause").addEventListener("click", async () => {
-  await apiPost(API.pause);
-  document.body.classList.add("no-animations");
-});
-
+    await apiPost(API.pause);
+    document.body.classList.add("no-animations");
+  });
 
   document.getElementById("btn-step").addEventListener("click", async () => {
     await apiPost(API.step);
@@ -265,69 +283,44 @@ function setupControls() {
   document.getElementById("btn-reset").addEventListener("click", async () => {
     await apiPost(API.reset);
     lastTick = 0;
-    const log = document.getElementById("event-log");
-    log.innerHTML = "";
+    document.getElementById("event-log").innerHTML = "";
     pollState();
   });
 
-  document
-    .getElementById("btn-apply-config")
-    .addEventListener("click", async () => {
-      const model = document.getElementById("select-model").value;
-      const scheduler = document.getElementById("select-scheduler").value;
-      const quantum = parseInt(
-        document.getElementById("input-quantum").value || "1",
-        10
-      );
+  document.getElementById("btn-apply-config").addEventListener("click", async () => {
+    const model = document.getElementById("select-model").value;
+    const scheduler = document.getElementById("select-scheduler").value;
+    const quantum = parseInt(document.getElementById("input-quantum").value, 10);
 
-      await apiPost(API.setConfig, { model, scheduler, quantum });
+    await apiPost(API.setConfig, { model, scheduler, quantum });
 
-      document.getElementById(
-        "badge-scheduler"
-      ).textContent = `Scheduler: ${scheduler}`;
-      document.getElementById(
-        "badge-quantum"
-      ).textContent = `Quantum: ${quantum}`;
-    });
+    document.getElementById("badge-scheduler").textContent = `Scheduler: ${scheduler}`;
+    document.getElementById("badge-quantum").textContent = `Quantum: ${quantum}`;
+  });
 
-  document
-    .getElementById("form-add-thread")
-    .addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const name =
-        document.getElementById("thread-name").value.trim() || null;
-      const burst = parseInt(
-        document.getElementById("thread-burst").value || "10",
-        10
-      );
-      const priority = parseInt(
-        document.getElementById("thread-priority").value || "0",
-        10
-      );
+  document.getElementById("form-add-thread").addEventListener("submit", async (e) => {
+    e.preventDefault();
 
-      await apiPost(API.addThread, { name, burst, priority });
-      document.getElementById("thread-name").value = "";
-      pollState();
-    });
+    const name = document.getElementById("thread-name").value.trim() || null;
+    const burst = parseInt(document.getElementById("thread-burst").value, 10);
+    const priority = parseInt(document.getElementById("thread-priority").value, 10);
+
+    await apiPost(API.addThread, { name, burst, priority });
+
+    document.getElementById("thread-name").value = "";
+    pollState();
+  });
 }
 
-function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollState, 500); // 500ms refresh
-}
-
-// Boot
-
+// =============================
+//   INIT
+// =============================
 window.addEventListener("DOMContentLoaded", async () => {
   setupControls();
-
-  // Auto-initialize demo scenario on first load
   try {
     await apiPost(API.initDemo);
   } catch (err) {
     console.error("Failed to init demo", err);
   }
-
   startPolling();
 });
-

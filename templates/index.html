@@ -12,15 +12,19 @@
     rel="stylesheet"
   />
 </head>
+
 <body>
   <div class="app-root">
+
+    <!-- HEADER -->
     <header class="app-header glass">
       <div class="header-main">
         <h1>Real-Time Multithreaded Simulator</h1>
         <p class="subtitle">
-          Visualizing user threads, kernel threads, models &amp; synchronization in real time.
+          Visualizing user threads, kernel threads, models & synchronization in real time.
         </p>
       </div>
+
       <div class="header-badges">
         <span class="badge badge-primary" id="badge-model">Model: -</span>
         <span class="badge badge-secondary" id="badge-scheduler">Scheduler: RR</span>
@@ -30,13 +34,15 @@
     </header>
 
     <main class="layout-grid">
-      <!-- LEFT PANEL -->
+
+      <!-- LEFT PANEL — CONTROLS -->
       <section class="panel glass" id="control-panel">
         <div class="panel-header">
           <h2>Controls</h2>
         </div>
 
         <div class="controls-grid">
+
           <div class="controls-row">
             <button class="btn btn-primary" id="btn-init-demo">Init Demo</button>
             <button class="btn" id="btn-start">Start</button>
@@ -69,12 +75,12 @@
               <input id="input-quantum" type="number" min="1" value="1" />
             </div>
 
-            <button class="btn btn-outline" id="btn-apply-config">
-              Apply
-            </button>
+            <button class="btn btn-outline" id="btn-apply-config">Apply</button>
           </div>
+
         </div>
 
+        <!-- Stats -->
         <div class="panel-header panel-header--spaced">
           <h2>Stats</h2>
         </div>
@@ -84,20 +90,24 @@
             <span class="stat-label">Tick</span>
             <span class="stat-value" id="stat-tick">0</span>
           </div>
+
           <div class="stat-card glass-soft">
             <span class="stat-label">Threads</span>
             <span class="stat-value" id="stat-threads">0</span>
           </div>
+
           <div class="stat-card glass-soft">
             <span class="stat-label">Completed</span>
             <span class="stat-value" id="stat-completed">0</span>
           </div>
+
           <div class="stat-card glass-soft">
             <span class="stat-label">Context Switches</span>
             <span class="stat-value" id="stat-context-switches">0</span>
           </div>
         </div>
 
+        <!-- Add thread -->
         <div class="panel-header panel-header--spaced">
           <h2>Add Thread</h2>
         </div>
@@ -107,19 +117,23 @@
             <label for="thread-name">Name</label>
             <input id="thread-name" type="text" placeholder="e.g. T4-user" />
           </div>
+
           <div class="field-group">
             <label for="thread-burst">Burst Time</label>
             <input id="thread-burst" type="number" min="1" value="12" />
           </div>
+
           <div class="field-group">
             <label for="thread-priority">Priority</label>
             <input id="thread-priority" type="number" min="0" value="0" />
           </div>
+
           <button class="btn btn-primary" type="submit">Add Thread</button>
         </form>
+
       </section>
 
-      <!-- CENTER PANEL -->
+      <!-- CENTER PANEL — THREADS -->
       <section class="panel glass" id="threads-panel">
         <div class="panel-header">
           <h2>Threads</h2>
@@ -131,7 +145,7 @@
               <tr>
                 <th>ID</th>
                 <th>Name</th>
-                <th>State</th>
+                <th>Status</th>
                 <th>Remaining</th>
                 <th>Priority</th>
                 <th>Core</th>
@@ -149,7 +163,7 @@
         <div class="cores-grid" id="cores-grid"></div>
       </section>
 
-      <!-- RIGHT PANEL -->
+      <!-- RIGHT PANEL — SYNCHRONIZATION -->
       <section class="panel glass" id="sync-panel">
         <div class="panel-header">
           <h2>Synchronization</h2>
@@ -159,35 +173,23 @@
         <div class="card semaphore-panel glass-soft">
           <h2 class="semaphore-title">Semaphores</h2>
 
-          <!-- CREATE SEMAPHORE FORM -->
           <div class="semaphore-form-row">
-            <input
-              id="sem-name"
-              class="input"
-              placeholder="Semaphore Name (e.g., S1)"
-            />
-            <input
-              id="sem-init"
-              class="input input-small"
-              type="number"
-              placeholder="Init"
-              value="1"
-            />
-            <button onclick="createSemaphore()" class="btn btn-primary">
-              Create
-            </button>
+            <input id="sem-name" class="input" placeholder="Semaphore Name (e.g., S1)" />
+            <input id="sem-init" class="input input-small" type="number" value="1" />
+            <button onclick="createSemaphore()" class="btn btn-primary">Create</button>
           </div>
 
-          <div id="sem-list" class="semaphore-list">
-            <!-- Semaphore cards inserted here -->
-          </div>
+          <div id="sem-list" class="semaphore-list"></div>
         </div>
 
+        <!-- Event Log -->
         <div class="sync-section">
           <h3>Event Log</h3>
           <div id="event-log" class="event-log"></div>
         </div>
+
       </section>
+
     </main>
   </div>
 
