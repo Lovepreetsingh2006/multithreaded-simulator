@@ -12,6 +12,44 @@ const API = {
 let pollTimer = null;
 let lastTick = 0;
 
+// =============================
+//   SEMAPHORE FUNCTIONS (new)
+// =============================
+
+function createSemaphore() {
+  const name = document.getElementById("sem-name").value.trim();
+  const init = parseInt(document.getElementById("sem-init").value, 10);
+
+  if (!name) return alert("Enter semaphore name.");
+
+  fetch("/api/semaphore/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name, initial: init }),
+  }).then(() => refreshState());
+}
+
+function semaphoreWait(semName, threadId) {
+  fetch("/api/semaphore/wait", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: semName, thread_id: threadId }),
+  }).then(() => refreshState());
+}
+
+function semaphoreSignal(semName) {
+  fetch("/api/semaphore/signal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: semName }),
+  }).then(() => refreshState());
+}
+
+// Simple helper so our semaphore functions can trigger a UI refresh
+function refreshState() {
+  pollState();
+}
+
 async function apiPost(url, body) {
   const res = await fetch(url, {
     method: "POST",
@@ -32,7 +70,8 @@ function renderState(state) {
   // Stats
   document.getElementById("stat-tick").textContent = state.tick;
   document.getElementById("stat-threads").textContent = state.threads.length;
-  document.getElementById("stat-completed").textContent = state.stats.completed;
+  document.getElementById("stat-completed").textContent =
+    state.stats.completed;
   document.getElementById("stat-context-switches").textContent =
     state.stats.context_switches;
 
@@ -86,6 +125,11 @@ function renderState(state) {
       <td>${t.remaining}</td>
       <td>${t.priority}</td>
       <td>${t.mapped_kernel === null ? "-" : t.mapped_kernel}</td>
+      <td>
+        <button class="btn-primary" onclick="semaphoreWait('S1', ${t.id})">
+          WAIT S1
+        </button>
+      </td>
     `;
     tbody.appendChild(tr);
   });
@@ -124,23 +168,36 @@ function renderState(state) {
     coresGrid.appendChild(div);
   });
 
-  // Semaphores
-  const semList = document.getElementById("semaphore-list");
+  // =============================
+  //   SEMAPHORES UI (new)
+  // =============================
+  let semList = document.getElementById("sem-list");
   semList.innerHTML = "";
-  Object.entries(state.semaphores || {}).forEach(([name, sem]) => {
-    const card = document.createElement("div");
-    card.className = "semaphore-card";
-    card.innerHTML = `
-      <div class="sem-name">${name}</div>
-      <div class="sem-meta">
-        <span>Value: ${sem.value}</span>
-        <span>Blocked: ${
-          sem.blocked && sem.blocked.length ? sem.blocked.join(", ") : "-"
-        }</span>
+
+  for (let [name, sem] of Object.entries(state.semaphores || {})) {
+    let blocked = sem.blocked.length ? sem.blocked.join(", ") : "None";
+
+    let div = document.createElement("div");
+    div.className = "sem-card";
+
+    div.innerHTML = `
+      <div class="flex justify-between">
+        <div>
+          <strong>${name}</strong><br>
+          Value: ${sem.value} <br>
+          Blocked: ${blocked}
+        </div>
+
+        <div class="flex flex-col space-y-2">
+          <button class="btn-primary" onclick="semaphoreSignal('${name}')">
+            SIGNAL (V)
+          </button>
+        </div>
       </div>
     `;
-    semList.appendChild(card);
-  });
+
+    semList.appendChild(div);
+  }
 
   // Simple event log: log on tick change
   if (state.tick !== lastTick) {
@@ -189,12 +246,16 @@ function setupControls() {
     });
 
   document.getElementById("btn-start").addEventListener("click", async () => {
-    await apiPost(API.start);
-  });
+  await apiPost(API.start);
+  document.body.classList.remove("no-animations");
+});
+
 
   document.getElementById("btn-pause").addEventListener("click", async () => {
-    await apiPost(API.pause);
-  });
+  await apiPost(API.pause);
+  document.body.classList.add("no-animations");
+});
+
 
   document.getElementById("btn-step").addEventListener("click", async () => {
     await apiPost(API.step);
@@ -269,3 +330,4 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   startPolling();
 });
+

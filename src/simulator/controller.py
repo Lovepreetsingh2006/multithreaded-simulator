@@ -22,7 +22,7 @@ from .core import (
 from .sync import SimSemaphore, Monitor
 
 # Default tick interval (seconds)
-TICK_INTERVAL = 0.2
+TICK_INTERVAL = 1
 
 
 class SimulationController:
